@@ -4,6 +4,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import postes, score_dex, anomalies, feedback, applications
+from ia.scheduler import scheduler, run_ia_pipeline  # ← ajoute
 
 app = FastAPI(
     title="DEX OCP API",
@@ -33,3 +34,14 @@ def root():
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+def startup_event():
+    scheduler.start()
+    run_ia_pipeline()   # ← lance une première fois au démarrage
+    print("Scheduler IA démarré — analyse toutes les 30 min")
+
+@app.on_event("shutdown")
+def shutdown_event():
+    scheduler.shutdown()
