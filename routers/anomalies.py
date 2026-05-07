@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import get_db, engine  # ← ajoute engine ici
+from database import get_db, engine
 
 router = APIRouter(prefix="/api/anomalies", tags=["Anomalies IA"])
 
@@ -18,30 +18,28 @@ def get_anomalies(resolues: bool = False, db: Session = Depends(get_db)):
             a.severite,
             a.description,
             a.score_anomalie,
-            a.detecte_le,
+            a.date_detection,
             a.resolue,
-            a.explication_ia,
             p.nom_utilisateur,
             p.departement
         FROM anomalies_etl a
         LEFT JOIN postes_etl p ON p.code_poste = a.code_poste
         {filtre}
-        ORDER BY a.score_anomalie DESC, a.detecte_le DESC
+        ORDER BY a.score_anomalie DESC, a.date_detection DESC
         LIMIT 50
     """))
     return [dict(row._mapping) for row in result]
 
 
-# ⚠️ IMPORTANT : /stats et /ia/status AVANT /{id_anomalie}
-# sinon FastAPI interprète "stats" comme un id_anomalie
+# ⚠️ /stats et /ia/status AVANT /{id_anomalie}
 @router.get("/stats")
 def get_anomalies_stats(db: Session = Depends(get_db)):
     result = db.execute(text("""
         SELECT
-            COUNT(*)                                       AS total,
-            COUNT(*) FILTER (WHERE resolue = false)       AS non_resolues,
-            COUNT(*) FILTER (WHERE severite = 'critique') AS critiques,
-            COUNT(*) FILTER (WHERE severite = 'haute')    AS hautes
+            COUNT(*)                                        AS total,
+            COUNT(*) FILTER (WHERE resolue = false)         AS non_resolues,
+            COUNT(*) FILTER (WHERE severite = 'critique')   AS critiques,
+            COUNT(*) FILTER (WHERE severite = 'haute')      AS hautes
         FROM anomalies_etl
     """))
     return dict(result.fetchone()._mapping)
@@ -49,45 +47,38 @@ def get_anomalies_stats(db: Session = Depends(get_db)):
 
 @router.get("/ia/status")
 def get_ia_status():
-    from ia.scheduler import scheduler
-    jobs = scheduler.get_jobs()
-    next_run = str(jobs[0].next_run_time) if jobs else None
-    return {
-        "scheduler_running": scheduler.running,
-        "next_run":          next_run,
-        "model":             "Isolation Forest",
-    }
+    try:
+        from ia.scheduler import scheduler
+        jobs = scheduler.get_jobs()
+        next_run = str(jobs[0].next_run_time) if jobs else None
+        return {
+            "scheduler_running": scheduler.running,
+            "next_run":          next_run,
+            "model":             "Isolation Forest",
+        }
+    except Exception as e:
+        return {"scheduler_running": False, "next_run": None, "error": str(e)}
 
 
 @router.post("/ia/run-now")
 def run_ia_now():
-    from ia.scheduler import run_ia_pipeline
-    import threading
-    threading.Thread(target=run_ia_pipeline).start()
-    return {"message": "Pipeline IA lancé en arrière-plan"}
+    try:
+        from ia.scheduler import run_ia_pipeline
+        import threading
+        threading.Thread(target=run_ia_pipeline).start()
+        return {"message": "Pipeline IA lancé en arrière-plan"}
+    except Exception as e:
+        return {"message": f"Erreur : {e}"}
 
 
-# ⚠️ Cette route DOIT être après /stats et /ia/status
+# ⚠️ Route dynamique — doit rester en DERNIER
 @router.put("/{id_anomalie}/resolve")
 def resolve_anomalie(id_anomalie: str, db: Session = Depends(get_db)):
-    try:
-        real_id = int(id_anomalie)
-        # C'est un entier → cherche par id_anomalie
-        with engine.connect() as conn:
-            conn.execute(text("""
-                UPDATE anomalies_etl
-                SET resolue = true
-                WHERE id_anomalie = :id
-            """), {"id": real_id})
-            conn.commit()
-    except ValueError:
-        # C'est une string type "ANO-003" → cherche par id_app
-        with engine.connect() as conn:
-            conn.execute(text("""
-                UPDATE anomalies_etl
-                SET resolue = true
-                WHERE id_app = :id AND resolue = false
-            """), {"id": id_anomalie})
-            conn.commit()
-
+    with engine.connect() as conn:
+        conn.execute(text("""
+            UPDATE anomalies_etl
+            SET resolue = true
+            WHERE id_anomalie = :id
+        """), {"id": id_anomalie})
+        conn.commit()
     return {"message": "Anomalie résolue", "id": id_anomalie}
