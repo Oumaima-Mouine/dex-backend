@@ -181,6 +181,7 @@ def save_anomalies(df_result: pd.DataFrame, engine) -> int:
                 'score_anomalie': round(float(row['score_composite']), 4),
                 'description':    description,
                 'detecte_le':     datetime.now(),
+                'confiance_ia': round(float(row['score_composite']) * 100, 1),
             })
             inserted += 1
 

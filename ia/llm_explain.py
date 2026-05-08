@@ -5,10 +5,12 @@
 import os
 import warnings
 warnings.filterwarnings("ignore")
+import json
 
 import google.generativeai as genai
 from dotenv import load_dotenv
 from sqlalchemy import text
+
 
 load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -47,36 +49,47 @@ _GEMINI_MODEL = _pick_best_model()
 # ── Génération d'explication ─────────────────────────────────────────────────
 
 def generate_explanation(poste_data: dict) -> str:
-    """
-    Génère une explication en français pour un poste anormal.
-    Si Gemini échoue, retourne une explication basée sur les règles métier.
-    """
     prompt = f"""Tu es un expert IT au service DSI d'OCP Safi.
-Analyse ce poste informatique et explique EN UNE SEULE PHRASE COURTE pourquoi il est anormal.
-Sois direct, précis et actionnable (commence par le problème principal).
+Analyse ce poste et réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks :
+{{
+  "explication": "Une phrase expliquant le problème principal",
+  "recommandations": ["Action 1", "Action 2", "Action 3", "Action 4"]
+}}
 
-Poste {poste_data.get('code_poste')} — Métriques :
-- CPU       : {poste_data.get('cpu_pct', 'N/A')}%
-- RAM       : {poste_data.get('ram_pct', 'N/A')}%
-- Disque    : {poste_data.get('disque_pct', 'N/A')}%
-- Erreurs   : {poste_data.get('nb_erreurs', 0)}
-- Crashs    : {poste_data.get('nb_crashs', 0)}
-- Ping      : {poste_data.get('ping_ms', 'N/A')} ms
-- Score DEX : {poste_data.get('score_dex_it', 'N/A')}/10
-
-Réponds en une seule phrase en français :"""
+Poste {poste_data.get('code_poste')} :
+- CPU: {poste_data.get('cpu_pct')}% | RAM: {poste_data.get('ram_pct')}%
+- Disque: {poste_data.get('disque_pct')}% | Ping: {poste_data.get('ping_ms')}ms
+- Erreurs: {poste_data.get('nb_erreurs')} | Crashs: {poste_data.get('nb_crashs')}
+- Score DEX: {poste_data.get('score_dex_it')}/10"""
 
     try:
         model = genai.GenerativeModel(_GEMINI_MODEL)
         response = model.generate_content(prompt)
-        result = response.text.strip()
-        # Nettoyage : supprime les guillemets et sauts de ligne
-        result = result.replace('\n', ' ').strip('"').strip("'")
-        return result
+        text = response.text.strip().replace('```json','').replace('```','').strip()
+        data = json.loads(text)
+        return data.get('explication', ''), data.get('recommandations', [])
     except Exception as e:
-        print(f"[Gemini] Erreur API : {e}")
-        return _rule_based_explanation(poste_data)
+        print(f"[Gemini] Erreur : {e}")
+        return _rule_based_explanation(poste_data), _rule_based_recs(poste_data)
+    
 
+def _rule_based_recs(poste_data: dict) -> list:
+    recs = []
+    if (poste_data.get('cpu_pct') or 0) > 85:
+        recs.append("Fermer les processus non nécessaires (Task Manager)")
+        recs.append("Vérifier les tâches planifiées Windows")
+    if (poste_data.get('ram_pct') or 0) > 85:
+        recs.append("Identifier l'application consommant la RAM")
+        recs.append("Redémarrer l'application fautive")
+    if (poste_data.get('disque_pct') or 0) > 80:
+        recs.append("Vider C:\\Windows\\Temp")
+        recs.append("Déplacer les données vers le serveur partagé")
+    if (poste_data.get('ping_ms') or 0) > 500:
+        recs.append("Vérifier le câble réseau physique")
+        recs.append("Contacter l'équipe infrastructure réseau")
+    if not recs:
+        recs = ["Planifier une inspection préventive", "Surveiller à nouveau dans 30 min"]
+    return recs[:4]
 
 def _rule_based_explanation(poste_data: dict) -> str:
     """
@@ -178,15 +191,18 @@ def enrich_anomalies_with_explanation(engine) -> int:
     for row in rows:
         data = dict(row._mapping)
         explication = generate_explanation(data)
+        explication, recommandations = generate_explanation(data)
 
         with engine.connect() as conn:
             conn.execute(text("""
                 UPDATE anomalies_etl
-                SET explication_ia = :explication
-                WHERE id_anomalie  = :id
-            """), {
-                'explication': explication,
-                'id':          data['id_anomalie'],
+        SET explication_ia = :explication,
+            recommandations = :recs::jsonb
+        WHERE id_anomalie = :id
+    """), {
+        'explication': explication,
+        'recs': json.dumps(recommandations),
+        'id': data['id_anomalie'],
             })
             conn.commit()
 
