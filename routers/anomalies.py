@@ -1,8 +1,12 @@
+# routers/anomalies.py
+# Router FastAPI — expose les anomalies avec recommandations + confiance_ia Gemini
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Optional
 from database import get_db, engine
+import json
 
 router = APIRouter(prefix="/api/anomalies", tags=["Anomalies IA"])
 
@@ -48,7 +52,21 @@ def get_anomalies(
         ORDER BY a.score_anomalie DESC, a.detecte_le DESC
         LIMIT {limit} OFFSET {offset}
     """))
-    return [dict(row._mapping) for row in result]
+
+    rows = []
+    for row in result:
+        d = dict(row._mapping)
+        # Désérialiser recommandations JSONB → liste Python
+        if d.get('recommandations'):
+            if isinstance(d['recommandations'], str):
+                try:
+                    d['recommandations'] = json.loads(d['recommandations'])
+                except Exception:
+                    d['recommandations'] = []
+        else:
+            d['recommandations'] = []
+        rows.append(d)
+    return rows
 
 
 # ── GET /stats ────────────────────────────────────────────────────────────────
@@ -81,9 +99,9 @@ def get_anomalie_types(db: Session = Depends(get_db)):
 def get_ia_status():
     try:
         from ia.scheduler import scheduler
-        jobs = scheduler.get_jobs()
+        jobs     = scheduler.get_jobs()
         next_run = str(jobs[0].next_run_time) if jobs else None
-        return {"scheduler_running": scheduler.running, "next_run": next_run, "model": "Isolation Forest"}
+        return {"scheduler_running": scheduler.running, "next_run": next_run, "model": "Isolation Forest + Gemini"}
     except Exception as e:
         return {"scheduler_running": False, "next_run": None, "error": str(e)}
 
@@ -95,7 +113,7 @@ def run_ia_now():
         from ia.scheduler import run_ia_pipeline
         import threading
         threading.Thread(target=run_ia_pipeline).start()
-        return {"message": "Pipeline IA lancé en arrière-plan"}
+        return {"message": "Pipeline IA lancé en arrière-plan (Isolation Forest + Gemini)"}
     except Exception as e:
         return {"message": f"Erreur : {e}"}
 
@@ -105,16 +123,27 @@ def run_ia_now():
 def get_historique_poste(code_poste: str, db: Session = Depends(get_db)):
     result = db.execute(text("""
         SELECT id_anomalie, type_anomalie, severite, description,
-               score_anomalie, detecte_le, resolue, explication_ia
+               score_anomalie, detecte_le, resolue, explication_ia,
+               recommandations, confiance_ia
         FROM anomalies_etl
         WHERE code_poste = :code
         ORDER BY detecte_le DESC
         LIMIT 50
     """), {"code": code_poste})
-    return [dict(row._mapping) for row in result]
+
+    rows = []
+    for row in result:
+        d = dict(row._mapping)
+        if d.get('recommandations') and isinstance(d['recommandations'], str):
+            try:
+                d['recommandations'] = json.loads(d['recommandations'])
+            except Exception:
+                d['recommandations'] = []
+        rows.append(d)
+    return rows
 
 
-# ── GET /metriques/{code_poste} — pour mini-charts ────────────────────────────
+# ── GET /metriques/{code_poste} ───────────────────────────────────────────────
 @router.get("/metriques/{code_poste}")
 def get_metriques_poste(code_poste: str, limit: int = 12, db: Session = Depends(get_db)):
     result = db.execute(text("""
@@ -130,20 +159,15 @@ def get_metriques_poste(code_poste: str, limit: int = 12, db: Session = Depends(
 # ── POST /tickets ─────────────────────────────────────────────────────────────
 @router.post("/tickets")
 def create_ticket(ticket: dict):
-    """
-    Crée un ticket d'incident. 
-    Corps : { id_anomalie, code_poste, titre, description, priorite, nom_utilisateur }
-    Note: intègre ici votre système GMAO ou ITSM si disponible.
-    """
     import uuid
     ticket_id = f"TKT-{str(uuid.uuid4())[:8].upper()}"
     return {
-        "success": True,
+        "success":   True,
         "ticket_id": ticket_id,
-        "message": f"Ticket {ticket_id} créé",
-        "titre": ticket.get("titre"),
-        "priorite": ticket.get("priorite", "haute"),
-        "assignee": "Équipe IT OCP Safi",
+        "message":   f"Ticket {ticket_id} créé",
+        "titre":     ticket.get("titre"),
+        "priorite":  ticket.get("priorite", "haute"),
+        "assignee":  "Équipe IT OCP Safi",
     }
 
 
