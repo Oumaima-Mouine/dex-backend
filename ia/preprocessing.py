@@ -28,7 +28,7 @@ def load_metriques(engine) -> pd.DataFrame:
             m.nb_erreurs,
             m.nb_crashs,
             m.ping_ms,
-            m.score_dex_it,
+            m.score_technique AS score_dex_it,
             m.collecte_le
         FROM (
             SELECT DISTINCT ON (code_poste) *
@@ -60,7 +60,7 @@ def load_metriques_historique(engine, jours: int = 7) -> pd.DataFrame:
             m.nb_erreurs,
             m.nb_crashs,
             m.ping_ms,
-            m.score_dex_it,
+            m.score_technique AS score_dex_it,
             m.collecte_le,
             p.departement
         FROM metriques_postes_etl m
