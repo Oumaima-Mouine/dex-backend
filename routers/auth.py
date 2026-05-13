@@ -14,6 +14,12 @@ from datetime import datetime, timedelta
 from database import get_db
 import os
 
+
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+
+
+
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -179,6 +185,49 @@ def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
 @router.get("/me")
 def get_me(current_user: dict = Depends(get_current_user)):
     return current_user
+
+# ── Login with Google ─────────────────────────────────────────────────────────────
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+
+class GoogleAuthRequest(BaseModel):
+    credential: str  # the JWT token Google sends back
+
+@router.post("/google")
+def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)):
+    try:
+        # Verify the token with Google
+        idinfo = id_token.verify_oauth2_token(
+            body.credential,
+            google_requests.Request(),
+            GOOGLE_CLIENT_ID
+        )
+    except ValueError as e:
+        print(f"[google_auth] token error: {e}")  # check this in terminal
+        raise HTTPException(status_code=401, detail=f"Invalid Google token : {e}")
+
+    email      = idinfo["email"]
+    nom_complet = idinfo.get("name", email)
+
+    # Get or create user
+    user = db.execute(
+        text("SELECT id, nom_complet, email, role FROM utilisateurs_auth WHERE email = :email"),
+        {"email": email}
+    ).fetchone()
+
+    if not user:
+        result = db.execute(text("""
+            INSERT INTO utilisateurs_auth (nom_complet, email, password_hash, role)
+            VALUES (:nom, :email, '', 'user')
+            RETURNING id, nom_complet, email, role
+        """), {"nom": nom_complet, "email": email})
+        db.commit()
+        user = result.fetchone()
+
+    user_dict = dict(user._mapping)
+    access  = create_token({"sub": str(user_dict["id"]), "role": user_dict["role"]}, ACCESS_EXPIRE)
+    refresh = create_token({"sub": str(user_dict["id"]), "type": "refresh"}, REFRESH_EXPIRE)
+
+    return TokenResponse(access_token=access, refresh_token=refresh, user=user_dict)
 
 
 # ── POST /signout ─────────────────────────────────────────────────────────────

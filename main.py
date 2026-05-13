@@ -1,6 +1,7 @@
 # main.py
 # Point d'entrée du backend. Lance avec : uvicorn main:app --reload
-
+from dotenv import load_dotenv
+load_dotenv()  # charge les variables d'environnement depuis .env
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import postes, score_dex, anomalies, feedback, applications
