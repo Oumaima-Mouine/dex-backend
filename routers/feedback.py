@@ -10,13 +10,24 @@ router = APIRouter(prefix="/api/feedback", tags=["Feedback"])
 def get_feedback(db: Session = Depends(get_db)):
     result = db.execute(text("""
         SELECT
-            id_reponse, matricule, sondage,
-            date_reponse,
-            note_globale, note_vitesse, note_stabilite,
-            note_support, note_outils, commentaire,
-            score_satisfaction
-        FROM feedback_etl
-        ORDER BY date_reponse DESC
+            f.id_reponse,
+            f.matricule,
+            f.code_poste,
+            -- nom_utilisateur from postes for display
+            COALESCE(p.nom_utilisateur, f.matricule) AS nom_utilisateur,
+            f.sondage,
+            -- Cast date to ISO string so frontend always gets 'YYYY-MM-DD'
+            TO_CHAR(f.date_reponse, 'YYYY-MM-DD') AS date_reponse,
+            f.note_globale,
+            f.note_vitesse,
+            f.note_stabilite,
+            f.note_support,
+            f.note_outils,
+            f.commentaire,
+            f.score_satisfaction
+        FROM feedback_etl f
+        LEFT JOIN postes_etl p ON p.code_poste = f.code_poste
+        ORDER BY f.date_reponse DESC
         LIMIT 50
     """))
     return [dict(row._mapping) for row in result]

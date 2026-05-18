@@ -155,7 +155,7 @@ def get_my_metrics(
     rows = db.execute(
         text("""
             SELECT
-                date_collecte,
+                TO_CHAR(date_collecte, 'YYYY-MM-DD') AS date_collecte,
                 cpu_pct,
                 ram_pct,
                 disque_pct,
@@ -167,7 +167,7 @@ def get_my_metrics(
                 statut_performance
             FROM metriques_postes_etl
             WHERE code_poste = :cp
-              AND date_collecte >= CURRENT_DATE - (INTERVAL '1 day' * :days)
+              AND date_collecte >= CURRENT_DATE - INTERVAL ':days days'
             ORDER BY date_collecte ASC
         """),
         {"cp": code_poste, "days": days}
@@ -191,7 +191,7 @@ def get_my_feedback(
             SELECT
                 id_reponse,
                 sondage,
-                date_reponse,
+                TO_CHAR(date_reponse, 'YYYY-MM-DD') AS date_reponse,
                 note_globale,
                 note_vitesse,
                 note_stabilite,
@@ -228,19 +228,28 @@ def submit_feedback(
     notes = [payload[f] for f in required]
     score_satisfaction = round(sum(notes) / len(notes), 2)
 
+    # Get nom_utilisateur from postes_etl to use as matricule display
+    poste_row = db.execute(
+        text("SELECT nom_utilisateur FROM postes_etl WHERE code_poste = :cp"),
+        {"cp": code_poste}
+    ).fetchone()
+    nom_utilisateur = poste_row.nom_utilisateur if poste_row else code_poste
+
     db.execute(
         text("""
             INSERT INTO feedback_etl
-                (code_poste, sondage, date_reponse,
+                (code_poste, matricule, id_employe, sondage, date_reponse,
                  note_globale, note_vitesse, note_stabilite,
                  note_support, note_outils, commentaire, score_satisfaction)
             VALUES
-                (:cp, :sondage, CURRENT_DATE,
+                (:cp, :matricule, :id_employe, :sondage, CURRENT_DATE,
                  :note_globale, :note_vitesse, :note_stabilite,
                  :note_support, :note_outils, :commentaire, :score_satisfaction)
         """),
         {
             "cp": code_poste,
+            "matricule": nom_utilisateur,
+            "id_employe": current_user["id"],
             "sondage": payload.get("sondage", "Sondage DEX"),
             "note_globale": payload["note_globale"],
             "note_vitesse": payload["note_vitesse"],
