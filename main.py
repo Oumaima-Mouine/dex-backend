@@ -10,6 +10,7 @@ from routers.auth import router as auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from routers.auth import router as auth_router
 from routers.employee import router as employee_router 
+from routers import admin_tickets
 
 
 app = FastAPI(
@@ -39,6 +40,8 @@ app.include_router(feedback.router)
 app.include_router(applications.router)
 app.include_router(auth_router)
 app.include_router(employee_router)
+app.include_router(admin_tickets.router)
+
 @app.get("/")
 def root():
     return {"message": "DEX OCP API opérationnelle ✅", "version": "1.0.0"}
