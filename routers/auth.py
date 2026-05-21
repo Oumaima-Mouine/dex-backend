@@ -13,7 +13,10 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from database import get_db
 import os
-
+import smtplib
+import secrets
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
@@ -31,6 +34,7 @@ REFRESH_EXPIRE  = 60 * 24 * 7 # minutes (7 jours)
 # pwd_ctx  = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
+reset_tokens: dict = {}
 
 # ── Schemas Pydantic ──────────────────────────────────────────────────────────
 class SignUpRequest(BaseModel):
@@ -52,6 +56,12 @@ class TokenResponse(BaseModel):
 class RefreshRequest(BaseModel):
     refresh_token: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
 
 # ── Helpers JWT ───────────────────────────────────────────────────────────────
 def hash_password(password: str) -> str:
@@ -73,6 +83,126 @@ def create_token(data: dict, expires_minutes: int) -> str:
 def decode_token(token: str) -> dict:
     return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
 
+
+
+
+#── Forget password ─────────────────────────────────────────
+@router.post("/forgot-password")
+def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    user = db.execute(
+        text("SELECT id, email, nom_complet FROM utilisateurs_auth WHERE email = :email"),
+        {"email": body.email}
+    ).fetchone()
+
+    # Always return 200 — never reveal if email exists
+    if not user:
+        return {"message": "Si cet email existe, un lien a été envoyé."}
+
+    # Generate secure one-time token (expires in 30 min)
+    token      = secrets.token_urlsafe(32)
+    reset_tokens[token] = {
+        "user_id": user.id,
+        "expires": datetime.utcnow() + timedelta(minutes=30)
+    }
+
+    reset_link  = f"http://localhost:5173/reset-password?token={token}"
+    gmail_user  = os.getenv("GMAIL_USER")
+    gmail_pass  = os.getenv("GMAIL_APP_PASSWORD")
+
+    html_body = f"""
+    <div style="font-family:'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#fff">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:28px">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L4 7v10l8 5 8-5V7L12 2z" fill="#1a56db" opacity="0.15"/>
+          <path d="M12 2L4 7v10l8 5 8-5V7L12 2z" stroke="#1a56db" stroke-width="1.5" fill="none"/>
+          <circle cx="12" cy="12" r="2.5" fill="#1a56db"/>
+        </svg>
+        <span style="font-size:16px;font-weight:600;color:#111827">DEX Platform</span>
+      </div>
+
+      <h2 style="font-size:22px;font-weight:700;color:#111827;margin:0 0 12px">
+        Réinitialisation du mot de passe
+      </h2>
+
+      <p style="font-size:15px;color:#374151;line-height:1.6;margin:0 0 8px">
+        Bonjour <strong>{user.nom_complet}</strong>,
+      </p>
+      <p style="font-size:14px;color:#6b7280;line-height:1.6;margin:0 0 28px">
+        Nous avons reçu une demande de réinitialisation de votre mot de passe.
+        Cliquez sur le bouton ci-dessous — ce lien expire dans <strong>30 minutes</strong>.
+      </p>
+
+      <a href="{reset_link}"
+         style="display:inline-block;padding:14px 32px;background:#111827;color:#ffffff;
+                border-radius:8px;text-decoration:none;font-size:15px;font-weight:600;
+                letter-spacing:0.01em">
+        Réinitialiser mon mot de passe
+      </a>
+
+      <p style="font-size:12px;color:#9ca3af;margin-top:32px;line-height:1.6">
+        Si vous n'avez pas fait cette demande, ignorez cet email — votre mot de passe
+        restera inchangé.<br/>Ce lien expirera automatiquement dans 30 minutes.
+      </p>
+
+      <hr style="border:none;border-top:1px solid #f1f5f9;margin:28px 0"/>
+      <p style="font-size:12px;color:#d1d5db;margin:0">
+        OCP Safi — DEX Platform · Ne pas répondre à cet email
+      </p>
+    </div>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "Réinitialisation de votre mot de passe — DEX Platform"
+    msg["From"]    = f"DEX Platform <{gmail_user}>"
+    msg["To"]      = user.email
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 587) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            smtp.login(gmail_user, gmail_pass)
+            smtp.sendmail(gmail_user, user.email, msg.as_string())
+        print(f"[AUTH] Reset email sent to {user.email}")
+    except Exception as e:
+        print(f"[AUTH] Email send failed: {e}")
+        # Don't expose the error to the client
+        raise HTTPException(500, "Erreur d'envoi d'email. Contactez l'administrateur.")
+
+    return {"message": "Si cet email existe, un lien a été envoyé."}
+
+
+@router.get("/reset-password/verify")
+def verify_reset_token(token: str):
+    entry = reset_tokens.get(token)
+    if not entry:
+        raise HTTPException(400, "Token invalide ou expiré")
+    if datetime.utcnow() > entry["expires"]:
+        del reset_tokens[token]
+        raise HTTPException(400, "Token expiré — veuillez refaire la demande")
+    return {"valid": True}
+
+
+@router.post("/reset-password")
+def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
+    entry = reset_tokens.get(body.token)
+    if not entry:
+        raise HTTPException(400, "Token invalide ou expiré")
+    if datetime.utcnow() > entry["expires"]:
+        del reset_tokens[body.token]
+        raise HTTPException(400, "Token expiré — veuillez refaire la demande")
+    if len(body.new_password) < 8:
+        raise HTTPException(400, "Le mot de passe doit contenir au moins 8 caractères")
+
+    hashed = hash_password(body.new_password)
+    db.execute(
+        text("UPDATE utilisateurs_auth SET password_hash = :pwd WHERE id = :uid"),
+        {"pwd": hashed, "uid": entry["user_id"]}
+    )
+    db.commit()
+    del reset_tokens[body.token]
+    return {"message": "Mot de passe réinitialisé avec succès"}
 
 # ── Dependency — utilisateur courant ─────────────────────────────────────────
 def get_current_user(
@@ -217,7 +347,7 @@ def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)):
     if not user:
         result = db.execute(text("""
             INSERT INTO utilisateurs_auth (nom_complet, email, password_hash, role)
-            VALUES (:nom, :email, '', 'user')
+            VALUES (:nom, :email, '', 'employee')
             RETURNING id, nom_complet, email, role
         """), {"nom": nom_complet, "email": email})
         db.commit()
