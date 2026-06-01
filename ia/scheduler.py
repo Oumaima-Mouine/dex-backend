@@ -8,7 +8,9 @@ from ia.preprocessing import load_metriques, prepare_features, print_summary
 from ia.anomaly_detection import detect_anomalies, save_anomalies
 from ia.llm_explain import enrich_anomalies_with_explanation
 from database import engine
-
+from routers.notifications import _do_generate
+from database import SessionLocal
+ 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(name)s] %(levelname)s — %(message)s',
@@ -77,3 +79,16 @@ scheduler.add_job(
     id='ia_pipeline',
     replace_existing=True,
 )
+
+
+
+def run_notification_generation():
+    db = SessionLocal()
+    try:
+        n = _do_generate(db)
+        print(f"[Notifications] {n} nouvelle(s) générée(s)")
+    finally:
+        db.close()
+ 
+# Planifier toutes les 15 minutes (ajuster selon besoin)
+scheduler.add_job(run_notification_generation, "interval", minutes=15, id="notif_gen")

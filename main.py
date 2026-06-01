@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers.auth import router as auth_router
 from routers.employee import router as employee_router 
 from routers import admin_tickets
+from routers.notifications import router as notifications_router, _do_generate
 
 
 app = FastAPI(
@@ -41,6 +42,8 @@ app.include_router(applications.router)
 app.include_router(auth_router)
 app.include_router(employee_router)
 app.include_router(admin_tickets.router)
+app.include_router(notifications_router)
+
 
 @app.get("/")
 def root():
@@ -54,7 +57,14 @@ def health_check():
 @app.on_event("startup")
 def startup_event():
     scheduler.start()
-    run_ia_pipeline()   # ← lance une première fois au démarrage
+    run_ia_pipeline()
+    # Génère les notifications initiales au démarrage
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        _do_generate(db)
+    finally:
+        db.close()
     print("Scheduler IA démarré — analyse toutes les 30 min")
 
 @app.on_event("shutdown")
