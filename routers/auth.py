@@ -347,7 +347,7 @@ def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)):
     if not user:
         result = db.execute(text("""
             INSERT INTO utilisateurs_auth (nom_complet, email, password_hash, role)
-            VALUES (:nom, :email, '', 'employee')
+            VALUES (:nom, :email, '', 'admin')
             RETURNING id, nom_complet, email, role
         """), {"nom": nom_complet, "email": email})
         db.commit()

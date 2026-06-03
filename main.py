@@ -9,8 +9,8 @@ from ia.scheduler import scheduler, run_ia_pipeline  # ← ajoute
 from routers.auth import router as auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from routers.auth import router as auth_router
-from routers.employee import router as employee_router 
-from routers import admin_tickets
+# from routers.employee import router as employee_router 
+# from routers import admin_tickets
 from routers.notifications import router as notifications_router, _do_generate
 
 
@@ -40,8 +40,8 @@ app.include_router(anomalies.router)
 app.include_router(feedback.router)
 app.include_router(applications.router)
 app.include_router(auth_router)
-app.include_router(employee_router)
-app.include_router(admin_tickets.router)
+# app.include_router(employee_router)
+# app.include_router(admin_tickets.router)
 app.include_router(notifications_router)
 
 
